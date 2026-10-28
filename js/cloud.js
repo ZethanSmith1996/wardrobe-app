@@ -51,7 +51,7 @@
   const itemData=x=>({owner_id:user.$id,name:safe(x.name),category:safe(x.category),colour:safe(x.colour),status:safe(x.status),section_id:safe(x.section)||null,photo_id:safe(x.photo_id)||null,notes:safe(x.notes)||null});
   async function upsert(tableId,rowId,data,exists){if(exists)return db.updateRow({databaseId:DATABASE,tableId,rowId,data});return db.createRow({databaseId:DATABASE,tableId,rowId,data,permissions:perms()})}
   async function history(itemId,oldStatus,newStatus){await db.createRow({databaseId:DATABASE,tableId:tables.history,rowId:id(),data:{owner_id:user.$id,clothing_id:itemId,previous_status:oldStatus||null,new_status:newStatus,changed_at:new Date().toISOString()},permissions:perms()})}
-  async function pull(){notice('Loading your cloud wardrobe…');const [sections,items]=await Promise.all([allRows(tables.sections),allRows(tables.items)]);cloudIds={sections:new Set(sections.map(s=>s.$id)),items:new Set(items.map(x=>x.$id))};const output={sections:sections.map(s=>({id:s.$id,name:s.name,type:s.section_type,x:s.x,y:s.y,w:s.width,h:s.height})),items:[]};for(const x of items){output.items.push({id:x.$id,name:x.name,category:x.category,colour:x.colour||'',status:x.status,section:x.section_id||'',photo_id:x.photo_id||null,photo:await photoUrl(x.photo_id)})}localStorage.setItem(KEY,JSON.stringify(output));lastSnapshot=clone(output);ready=true;window.dispatchEvent(new Event('wardrobe-cloud-loaded'));notice('Cloud connected · '+output.items.length+' clothing items');$('#cloud-actions').hidden=false}
+  async function pull(){notice('Loading your cloud wardrobe…');const [sections,items]=await Promise.all([allRows(tables.sections),allRows(tables.items)]);cloudIds={sections:new Set(sections.map(s=>s.$id)),items:new Set(items.map(x=>x.$id))};const output={sections:sections.map(s=>({id:s.$id,name:s.name,type:s.section_type,x:s.x,y:s.y,w:s.width,h:s.height})),items:[]};for(const x of items){output.items.push({id:x.$id,name:x.name,category:x.category,colour:x.colour||'',status:x.status,section:x.section_id||'',notes:x.notes||'',photo_id:x.photo_id||null,photo:await photoUrl(x.photo_id)})}localStorage.setItem(KEY,JSON.stringify(output));lastSnapshot=clone(output);ready=true;window.dispatchEvent(new Event('wardrobe-cloud-loaded'));notice('Cloud connected · '+output.items.length+' clothing items');$('#cloud-actions').hidden=false}
   async function push(){if(!ready||!user)return;if(busy){pending=true;return}busy=true;try{const s=parse();const currentSectionIds=new Set(s.sections.map(x=>x.id)),currentItemIds=new Set(s.items.map(x=>x.id));
     // Save sections first, so clothing location references remain valid.
     for(const section of s.sections){await upsert(tables.sections,section.id,sectionData(section),cloudIds.sections.has(section.id));cloudIds.sections.add(section.id)}
@@ -71,6 +71,14 @@
     }
     for(const existing of [...cloudIds.items])if(!currentItemIds.has(existing)){await db.deleteRow({databaseId:DATABASE,tableId:tables.items,rowId:existing});cloudIds.items.delete(existing)}
     for(const existing of [...cloudIds.sections])if(!currentSectionIds.has(existing)){await db.deleteRow({databaseId:DATABASE,tableId:tables.sections,rowId:existing});cloudIds.sections.delete(existing)}
+    // Clean up unused photos after the database changes have been saved.
+    // Failures here do not invalidate the saved clothing changes.
+    const beforeIds=new Set((lastSnapshot?.items||[]).map(x=>x.photo_id).filter(Boolean));
+    const afterIds=new Set(parse().items.map(x=>x.photo_id).filter(Boolean));
+    for(const photoId of beforeIds){if(!afterIds.has(photoId)){
+      try{await storage.deleteFile({bucketId:BUCKET,fileId:photoId})}
+      catch(error){console.warn('Photo cleanup failed',photoId,error)}
+    }}
     lastSnapshot=clone(parse());notice('All changes saved to Appwrite');
   }catch(e){console.error(e);notice('Cloud save failed: '+(e.message||e),true)}finally{busy=false;if(pending){pending=false;setTimeout(push,150)}}}
   function schedule(){if(!ready)return;clearTimeout(timer);notice('Saving changes…');timer=setTimeout(push,650)}
