@@ -17,7 +17,17 @@
   const clone=x=>JSON.parse(JSON.stringify(x));
   const id=()=>A.ID.unique();
   const fileFromData=(data,name)=>{const [header,b64]=data.split(',');const mime=(header.match(/data:([^;]+)/)||[])[1]||'image/jpeg';const bytes=atob(b64),arr=new Uint8Array(bytes.length);for(let i=0;i<bytes.length;i++)arr[i]=bytes.charCodeAt(i);return new File([arr],name,{type:mime})};
-  async function uploadPhoto(data){if(!data?.startsWith('data:image/'))return null;const file=fileFromData(data,'wardrobe-'+Date.now()+'.jpg');const r=await storage.createFile({bucketId:BUCKET,fileId:id(),file,permissions:perms()});return r.$id}
+  async function uploadPhoto(data){
+    if(!data?.startsWith('data:image/'))return null;
+    const file=fileFromData(data,'wardrobe-'+Date.now()+'.jpg');
+    const fileId=id();
+    const uploaded=await storage.createFile({bucketId:BUCKET,fileId,file,permissions:perms()});
+    if(!uploaded?.$id)throw Error('Storage did not return a file ID');
+    // Verify the file is actually readable before recording its ID in the database.
+    const confirmed=await storage.getFile({bucketId:BUCKET,fileId:uploaded.$id});
+    if(confirmed.$id!==uploaded.$id)throw Error('Uploaded photograph could not be verified');
+    return uploaded.$id;
+  }
   async function photoUrl(fileId){
     if(!fileId)return null;
     try{
@@ -45,8 +55,19 @@
   async function push(){if(!ready||!user)return;if(busy){pending=true;return}busy=true;try{const s=parse();const currentSectionIds=new Set(s.sections.map(x=>x.id)),currentItemIds=new Set(s.items.map(x=>x.id));
     // Save sections first, so clothing location references remain valid.
     for(const section of s.sections){await upsert(tables.sections,section.id,sectionData(section),cloudIds.sections.has(section.id));cloudIds.sections.add(section.id)}
-    for(const item of s.items){if(item.photo?.startsWith('data:image/')&&!item.photo_id){item.photo_id=await uploadPhoto(item.photo);item.photo=null;const live=parse();const target=live.items.find(x=>x.id===item.id);if(target){target.photo_id=item.photo_id;target.photo=null;localStorage.setItem(KEY,JSON.stringify(live))}}
-      const old=lastSnapshot?.items?.find(x=>x.id===item.id);await upsert(tables.items,item.id,itemData(item),cloudIds.items.has(item.id));cloudIds.items.add(item.id);if(old&&old.status!==item.status)await history(item.id,old.status,item.status);
+    for(const item of s.items){
+      // A data URL is the actual photograph. Never discard it until upload and
+      // verification succeed. Older builds could leave stale photo_id values.
+      if(item.photo?.startsWith('data:image/')){
+        const uploadedId=await uploadPhoto(item.photo);
+        item.photo_id=uploadedId;
+        const live=parse();const target=live.items.find(x=>x.id===item.id);
+        if(target){target.photo_id=uploadedId;target.photo=null;localStorage.setItem(KEY,JSON.stringify(live))}
+      }
+      const old=lastSnapshot?.items?.find(x=>x.id===item.id);
+      await upsert(tables.items,item.id,itemData(item),cloudIds.items.has(item.id));
+      cloudIds.items.add(item.id);
+      if(old&&old.status!==item.status)await history(item.id,old.status,item.status);
     }
     for(const existing of [...cloudIds.items])if(!currentItemIds.has(existing)){await db.deleteRow({databaseId:DATABASE,tableId:tables.items,rowId:existing});cloudIds.items.delete(existing)}
     for(const existing of [...cloudIds.sections])if(!currentSectionIds.has(existing)){await db.deleteRow({databaseId:DATABASE,tableId:tables.sections,rowId:existing});cloudIds.sections.delete(existing)}
@@ -55,7 +76,7 @@
   function schedule(){if(!ready)return;clearTimeout(timer);notice('Saving changes…');timer=setTimeout(push,650)}
   async function importLocal(){if(!ready)return;const raw=localStorage.getItem('wardrobe-stage4-local-backup');if(!raw)return notice('No local backup found',true);let data;try{data=JSON.parse(raw)}catch{return notice('Local backup could not be read',true)}if(!Array.isArray(data.items)||!Array.isArray(data.sections))return notice('Local backup is invalid',true);
     if(!confirm('Import your original local wardrobe into this account? This ADDS its clothing and sections to your cloud wardrobe. Sample items will also be imported if present.'))return;
-    notice('Importing your local wardrobe…');try{const current=parse(),map=new Map();for(const s of data.sections){const newId=id();map.set(s.id,newId);current.sections.push({...s,id:newId})}for(const x of data.items)current.items.push({...x,id:id(),section:map.get(x.section)||''});localStorage.setItem(KEY,JSON.stringify(current));await push();await pull();notice('Local wardrobe imported successfully')}catch(e){notice('Import failed: '+e.message,true)}}
+    notice('Importing your local wardrobe…');try{const current=parse(),map=new Map();for(const s of data.sections){const newId=id();map.set(s.id,newId);current.sections.push({...s,id:newId})}for(const x of data.items)current.items.push({...x,id:id(),section:map.get(x.section)||''});localStorage.setItem(KEY,JSON.stringify(current));await push();if($('#cloud-notice').classList.contains('error'))return;await pull();notice('Local wardrobe imported successfully')}catch(e){notice('Import failed: '+e.message,true)}}
   async function signIn(email,password,register){notice(register?'Creating account…':'Signing in…');try{if(register)await account.create({userId:id(),email,password});await account.createEmailPasswordSession({email,password});await initialize()}catch(e){notice(e.message||'Authentication failed',true)}}
   async function initialize(){user=await account.get();$('#auth-screen').hidden=true;$('#cloud-user').textContent=user.email;$('#cloud-user').hidden=false;$('#cloud-logout').hidden=false;const backupKey='wardrobe-stage4-local-backup';if(!localStorage.getItem(backupKey)){const original=localStorage.getItem(KEY);if(original)localStorage.setItem(backupKey,original)}await pull()}
   async function logout(){if(!confirm('Sign out? Your cloud wardrobe remains saved.'))return;ready=false;await account.deleteSession({sessionId:'current'});user=null;$('#auth-screen').hidden=false;$('#cloud-logout').hidden=true;$('#cloud-user').hidden=true;$('#cloud-actions').hidden=true;notice('Signed out')}
