@@ -18,7 +18,24 @@
   const id=()=>A.ID.unique();
   const fileFromData=(data,name)=>{const [header,b64]=data.split(',');const mime=(header.match(/data:([^;]+)/)||[])[1]||'image/jpeg';const bytes=atob(b64),arr=new Uint8Array(bytes.length);for(let i=0;i<bytes.length;i++)arr[i]=bytes.charCodeAt(i);return new File([arr],name,{type:mime})};
   async function uploadPhoto(data){if(!data?.startsWith('data:image/'))return null;const file=fileFromData(data,'wardrobe-'+Date.now()+'.jpg');const r=await storage.createFile({bucketId:BUCKET,fileId:id(),file,permissions:perms()});return r.$id}
-  async function photoUrl(fileId){if(!fileId)return null;try{const response=await storage.getFileDownload({bucketId:BUCKET,fileId});const result=await fetch(response,{credentials:'include'});if(!result.ok)throw Error('Photo access failed');return URL.createObjectURL(await result.blob())}catch(e){console.warn('Photo could not load',e);return null}}
+  async function photoUrl(fileId){
+    if(!fileId)return null;
+    try{
+      // The Web SDK returns a URL here, not authenticated image bytes. A bare
+      // fetch of that URL can fail on Safari when third-party cookies are blocked.
+      // A short-lived user JWT preserves the existing private file permissions.
+      const token=await account.createJWT();
+      const url=storage.getFileView({bucketId:BUCKET,fileId});
+      const response=await fetch(url,{
+        headers:{'X-Appwrite-Project':'6ae1475800005a49aa07','X-Appwrite-JWT':token.jwt},
+        cache:'no-store'
+      });
+      if(!response.ok)throw Error('Photo request returned '+response.status);
+      const blob=await response.blob();
+      if(!blob.type.startsWith('image/'))throw Error('Storage returned non-image data');
+      return URL.createObjectURL(blob);
+    }catch(e){console.warn('Photo could not load',fileId,e);return null}
+  }
   async function allRows(tableId){let rows=[],offset=0;while(true){const page=await db.listRows({databaseId:DATABASE,tableId,queries:[A.Query.limit(100),A.Query.offset(offset)]});rows.push(...page.rows);if(page.rows.length<100)break;offset+=page.rows.length}return rows}
   const sectionData=s=>({owner_id:user.$id,name:safe(s.name),section_type:safe(s.type),x:Number(s.x)||0,y:Number(s.y)||0,width:Number(s.w)||12,height:Number(s.h)||9});
   const itemData=x=>({owner_id:user.$id,name:safe(x.name),category:safe(x.category),colour:safe(x.colour),status:safe(x.status),section_id:safe(x.section)||null,photo_id:safe(x.photo_id)||null,notes:safe(x.notes)||null});
