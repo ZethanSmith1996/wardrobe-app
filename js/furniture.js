@@ -106,6 +106,7 @@ function draw3d({scene,room,THREE}){
   const w=u.width,h=u.height,d=u.depth,t=Math.min(.022,w/14),group=new THREE.Group();
   const [x,z,rotation]=wallAnchor(u);group.position.set(x,u.base||0,z);group.rotation.y=rotation;
   group.userData.wardrobeUnitId=u.id;scene.add(group);
+  group.userData.storageUnitId=u.id;
   function part(a,b,c,px,py,pz,mat=mats.wood){
    const m=new THREE.Mesh(new THREE.BoxGeometry(Math.max(.003,a),Math.max(.003,b),Math.max(.003,c)),mat);
    m.position.set(px,py,pz);m.userData.wardrobeUnitId=u.id;m.castShadow=!!window.wardrobeAppearance?.get?.().shadows;m.receiveShadow=!!window.wardrobeAppearance?.get?.().shadows;group.add(m);return m;

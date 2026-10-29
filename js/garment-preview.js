@@ -6,7 +6,7 @@ const client=new Appwrite.Client().setEndpoint('https://fra.cloud.appwrite.io/v1
 const account=new Appwrite.Account(client),db=new Appwrite.TablesDB(client);
 function emit(){window.dispatchEvent(new Event('wardrobe-garments-updated'));const el=document.getElementById('garmentPreviewStatus');if(el)el.textContent=notice}
 function fromLocal(){try{const d=JSON.parse(localStorage.getItem(KEY)||'{}');return Array.isArray(d.items)?d.items:[]}catch{return []}}
-function sanitize(items){return items.filter(x=>x&&x.section&&['available','clean'].includes(String(x.status||'').toLowerCase())).map(x=>({id:String(x.id),name:String(x.name||'Garment'),category:String(x.category||''),colour:String(x.colour||''),section:String(x.section),status:String(x.status),notes:String(x.notes||''),photoId:String(x.photoId||'')}))}
+function sanitize(items){return items.filter(x=>x&&x.section&&String(x.status||'').toLowerCase()==='available').map(x=>({id:String(x.id),name:String(x.name||'Garment'),category:String(x.category||''),colour:String(x.colour||''),section:String(x.section),status:String(x.status),notes:String(x.notes||''),photoId:String(x.photoId||'')}))}
 async function reload(){
  try{
   const user=await account.get();connected=true;
@@ -17,7 +17,7 @@ async function reload(){
    if(batch.length<100)break;
   }while(offset<10000);
   garments=sanitize(rows.map(x=>({id:x.$id,name:x.name,category:x.category,colour:x.colour,section:x.section_id,status:x.status,notes:x.notes,photoId:x.photo_id})));
-  notice='Showing '+garments.length+' available/clean catalogue garments in their assigned locations.';
+  notice='Showing '+garments.length+' available catalogue garments in their assigned locations.';
  }catch(e){
   // Do not display possibly stale clothing belonging to a previously signed-in account.
   connected=false;garments=[];notice='Sign in on My Wardrobe to load your actual clothing preview.';
