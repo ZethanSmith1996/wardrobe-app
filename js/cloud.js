@@ -6,10 +6,10 @@
   const account = new A.Account(client), db = new A.TablesDB(client), storage = new A.Storage(client);
   const DATABASE='wardrobe_db', BUCKET='clothing_photos';
   const KEY='wardrobe-prototype-v1';
-  const tables={sections:'wardrobe_sections',items:'clothing_items',history:'laundry_history'};
+  const tables={sections:'wardrobe_sections',items:'clothing_items',history:'laundry_history',details:'clothing_details',categories:'wardrobe_category_settings'};
   const $=s=>document.querySelector(s);
   let user=null, ready=false, busy=false, pending=false, timer=null, lastSnapshot=null;
-  let cloudIds={sections:new Set(),items:new Set()};
+  let cloudIds={sections:new Set(),items:new Set(),details:new Set()};
   const notice=(message,error=false)=>{const el=$('#cloud-notice');el.textContent=message;el.classList.toggle('error',error)};
   const safe=x=>String(x??'');
   const perms=()=>[A.Permission.read(A.Role.user(user.$id)),A.Permission.update(A.Role.user(user.$id)),A.Permission.delete(A.Role.user(user.$id))];
@@ -51,7 +51,7 @@
   const itemData=x=>({owner_id:user.$id,name:safe(x.name),category:safe(x.category),colour:safe(x.colour),status:safe(x.status),section_id:safe(x.section)||null,photo_id:safe(x.photo_id)||null,notes:safe(x.notes)||null});
   async function upsert(tableId,rowId,data,exists){if(exists)return db.updateRow({databaseId:DATABASE,tableId,rowId,data});return db.createRow({databaseId:DATABASE,tableId,rowId,data,permissions:perms()})}
   async function history(itemId,oldStatus,newStatus){await db.createRow({databaseId:DATABASE,tableId:tables.history,rowId:id(),data:{owner_id:user.$id,clothing_id:itemId,previous_status:oldStatus||null,new_status:newStatus,changed_at:new Date().toISOString()},permissions:perms()})}
-  async function pull(){notice('Loading your cloud wardrobe…');const [sections,items]=await Promise.all([allRows(tables.sections),allRows(tables.items)]);cloudIds={sections:new Set(sections.map(s=>s.$id)),items:new Set(items.map(x=>x.$id))};const output={sections:sections.map(s=>({id:s.$id,name:s.name,type:s.section_type,x:s.x,y:s.y,w:s.width,h:s.height})),items:[]};for(const x of items){output.items.push({id:x.$id,name:x.name,category:x.category,colour:x.colour||'',status:x.status,section:x.section_id||'',notes:x.notes||'',photo_id:x.photo_id||null,photo:await photoUrl(x.photo_id)})}localStorage.setItem(KEY,JSON.stringify(output));lastSnapshot=clone(output);ready=true;window.dispatchEvent(new Event('wardrobe-cloud-loaded'));notice('Cloud connected · '+output.items.length+' clothing items');$('#cloud-actions').hidden=false}
+  async function pull(){notice('Loading your cloud wardrobe…');const [sections,items,details,categoryRows]=await Promise.all([allRows(tables.sections),allRows(tables.items),allRows(tables.details),allRows(tables.categories)]);cloudIds={sections:new Set(sections.map(s=>s.$id)),items:new Set(items.map(x=>x.$id)),details:new Set(details.map(x=>x.$id))};const detailMap=new Map(details.filter(d=>d.owner_id===user.$id).map(d=>[d.clothing_id,d]));const categoryRow=categoryRows.find(x=>x.owner_id===user.$id);cloudIds.categoriesExists=!!categoryRow;if(categoryRow){try{window.wardrobeCategories?.replace(JSON.parse(categoryRow.payload))}catch(e){console.warn('Invalid category settings',e)}}const output={sections:sections.map(s=>({id:s.$id,name:s.name,type:s.section_type,x:s.x,y:s.y,w:s.width,h:s.height})),items:[]};for(const x of items){output.items.push({id:x.$id,name:x.name,category:x.category,colour:x.colour||'',status:x.status,section:x.section_id||'',notes:x.notes||'',photo_id:x.photo_id||null,photo:await photoUrl(x.photo_id),...JSON.parse(detailMap.get(x.$id)?.payload||'{}')})}localStorage.setItem(KEY,JSON.stringify(output));lastSnapshot=clone(output);ready=true;window.dispatchEvent(new Event('wardrobe-cloud-loaded'));notice('Cloud connected · '+output.items.length+' clothing items');$('#cloud-actions').hidden=false}
   async function push(){if(!ready||!user)return;if(busy){pending=true;return}busy=true;try{const s=parse();const currentSectionIds=new Set(s.sections.map(x=>x.id)),currentItemIds=new Set(s.items.map(x=>x.id));
     // Save sections first, so clothing location references remain valid.
     for(const section of s.sections){await upsert(tables.sections,section.id,sectionData(section),cloudIds.sections.has(section.id));cloudIds.sections.add(section.id)}
@@ -67,9 +67,11 @@
       const old=lastSnapshot?.items?.find(x=>x.id===item.id);
       await upsert(tables.items,item.id,itemData(item),cloudIds.items.has(item.id));
       cloudIds.items.add(item.id);
+      const detail={subcategory:item.subcategory||'',brand:item.brand||'',size:item.size||'',material:item.material||'',fit:item.fit||'',season:item.season||[],occasion:item.occasion||[],purchaseDate:item.purchaseDate||'',purchasePrice:item.purchasePrice??null};
+      await upsert(tables.details,item.id,{owner_id:user.$id,clothing_id:item.id,payload:JSON.stringify(detail)},cloudIds.details.has(item.id));cloudIds.details.add(item.id);
       if(old&&old.status!==item.status)await history(item.id,old.status,item.status);
     }
-    for(const existing of [...cloudIds.items])if(!currentItemIds.has(existing)){await db.deleteRow({databaseId:DATABASE,tableId:tables.items,rowId:existing});cloudIds.items.delete(existing)}
+    for(const existing of [...cloudIds.items])if(!currentItemIds.has(existing)){await db.deleteRow({databaseId:DATABASE,tableId:tables.items,rowId:existing});cloudIds.items.delete(existing);if(cloudIds.details.has(existing)){await db.deleteRow({databaseId:DATABASE,tableId:tables.details,rowId:existing});cloudIds.details.delete(existing)}}
     for(const existing of [...cloudIds.sections])if(!currentSectionIds.has(existing)){await db.deleteRow({databaseId:DATABASE,tableId:tables.sections,rowId:existing});cloudIds.sections.delete(existing)}
     // Clean up unused photos after the database changes have been saved.
     // Failures here do not invalidate the saved clothing changes.
@@ -79,7 +81,7 @@
       try{await storage.deleteFile({bucketId:BUCKET,fileId:photoId})}
       catch(error){console.warn('Photo cleanup failed',photoId,error)}
     }}
-    lastSnapshot=clone(parse());notice('All changes saved to Appwrite');
+    const catPayload=JSON.stringify(window.wardrobeCategories?.all()||{});await upsert(tables.categories,'categories_'+user.$id,{owner_id:user.$id,payload:catPayload},cloudIds.categoriesExists);cloudIds.categoriesExists=true;lastSnapshot=clone(parse());notice('All changes saved to Appwrite');
   }catch(e){console.error(e);notice('Cloud save failed: '+(e.message||e),true)}finally{busy=false;if(pending){pending=false;setTimeout(push,150)}}}
   function schedule(){if(!ready)return;clearTimeout(timer);notice('Saving changes…');timer=setTimeout(push,650)}
   async function importLocal(){if(!ready)return;const raw=localStorage.getItem('wardrobe-stage4-local-backup');if(!raw)return notice('No local backup found',true);let data;try{data=JSON.parse(raw)}catch{return notice('Local backup could not be read',true)}if(!Array.isArray(data.items)||!Array.isArray(data.sections))return notice('Local backup is invalid',true);
@@ -93,7 +95,7 @@
     $('#cloud-logout').addEventListener('click',logout);
     $('#cloud-import').addEventListener('click',importLocal);
     $('#cloud-refresh').addEventListener('click',async()=>{if(!confirm('Reload from Appwrite? Unsaved local changes may be lost.'))return;try{ready=false;await pull()}catch(e){notice(e.message,true)}});
-    window.addEventListener('wardrobe-local-changed',schedule);
+    window.addEventListener('wardrobe-local-changed',schedule);window.addEventListener('wardrobe-categories-changed',schedule);
     try{await initialize()}catch(e){$('#auth-screen').hidden=false;notice('Sign in to connect your wardrobe')}
   });
   window.WardrobeCloud={get active(){return ready},uploadPhoto};
