@@ -25,23 +25,109 @@ $('deleteUnit').onclick=()=>{if(!confirm('Delete '+u.name+' from this room? Clot
 $('duplicateUnit').onclick=()=>{const clone={...u,id:'u'+Date.now()+Math.random().toString(36).slice(2,6),name:u.name+' copy',offset:u.offset+u.width+.05};fit(clone,api.getRoom());units.push(clone);selected=clone.id;save()};}
 function geom(u,c){const {room,x,y,w,l,scale}=c;const t=u.depth*scale;const along=u.offset*scale;const wide=u.width*scale;switch(u.wall){case 'north':return {x:x+along,y:y,width:wide,height:t};case 'south':return {x:x+along,y:y+l-t,width:wide,height:t};case 'east':return {x:x+w-t,y:y+along,width:t,height:wide};default:return {x,y:y+along,width:t,height:wide}}}
 function draw2d(c){const ns='http://www.w3.org/2000/svg';for(const u of units){fit(u,c.room);const g=geom(u,c),r=document.createElementNS(ns,'rect');for(const [k,v] of Object.entries(g))r.setAttribute(k,v);r.setAttribute('rx','3');r.setAttribute('fill',u.type==='drawers'?'#856b59':u.type==='rail'?'#617f88':u.type==='floating_shelf'?'#ba9d71':'#b09572');r.setAttribute('stroke',u.id===selected?'#55bfff':'#4b3b2e');r.setAttribute('stroke-width',u.id===selected?'4':'2');r.setAttribute('tabindex','0');r.setAttribute('role','button');r.setAttribute('aria-label','Edit '+u.name);r.style.cursor='grab';r.style.touchAction='none';r.addEventListener('click',()=>{selectUnit(u.id)});r.addEventListener('pointerdown',e=>{e.preventDefault();selectUnit(u.id);drag={id:u.id,wall:u.wall,start:e.clientX,startY:e.clientY,offset:u.offset,rect:c.svg.getBoundingClientRect(),scale:c.scale};r.setPointerCapture(e.pointerId)});r.addEventListener('pointermove',e=>{if(!drag||drag.id!==u.id)return;const rect=drag.rect;const factor=480/rect.width;const delta=(u.wall==='north'||u.wall==='south'?(e.clientX-drag.start):(e.clientY-drag.start))*factor/drag.scale;u.offset=snapOffset(u,drag.offset+delta,c.room);const q=geom(u,c);for(const [k,v] of Object.entries(q))r.setAttribute(k,v)});r.addEventListener('pointerup',()=>{if(drag){drag=null;save()}});r.addEventListener('pointercancel',()=>{drag=null;save()});c.svg.appendChild(r);const text=document.createElementNS(ns,'text');text.setAttribute('x',g.x+g.width/2);text.setAttribute('y',g.y+g.height/2+3);text.setAttribute('font-size','10');text.setAttribute('text-anchor','middle');text.setAttribute('fill','#fff');text.setAttribute('pointer-events','none');text.textContent=u.type==='rail'?'Rail':u.type==='floating_shelf'?'Shelf':u.type==='drawers'?'Drawers':u.type==='shelves'?'Shelves':'Wardrobe';c.svg.appendChild(text)} }
-function draw3d({scene,room,THREE}){const highlight=new THREE.MeshStandardMaterial({color:0x56bfff,emissive:0x174b70,roughness:.4});const wood=new THREE.MeshStandardMaterial({color:0xa78661,roughness:.7}),edge=new THREE.MeshStandardMaterial({color:0x5c4938,roughness:.8}),metal=new THREE.MeshStandardMaterial({color:0xb9b9b2,metalness:.7,roughness:.3}),drawerMat=new THREE.MeshStandardMaterial({color:0x98785a,roughness:.72});function cube(w,h,d,x,y,z,mat){const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat);m.position.set(x,y,z);scene.add(m);return m}for(const u of units){fit(u,room);const w=u.width,h=u.height,d=u.depth,t=.025;const center=-span(u.wall,room)/2+u.offset+w/2;let x=0,z=0,rotate=0;if(u.wall==='west'){x=-room.width/2+d/2;z=-room.length/2+u.offset+w/2;rotate=Math.PI/2}else if(u.wall==='east'){x=room.width/2-d/2;z=-room.length/2+u.offset+w/2;rotate=-Math.PI/2}else if(u.wall==='north'){x=center;z=-room.length/2+d/2;rotate=0}else{x=center;z=room.length/2-d/2;rotate=Math.PI}const group=new THREE.Group();group.userData.wardrobeUnitId=u.id;group.position.set(x,u.base||0,z);group.rotation.y=rotate;scene.add(group);group.traverse(child=>{child.userData.wardrobeUnitId=u.id});function part(a,b,c,px,py,pz,mat){const mesh=new THREE.Mesh(new THREE.BoxGeometry(a,b,c),mat);mesh.position.set(px,py,pz);mesh.userData.wardrobeUnitId=u.id;group.add(mesh);return mesh}if(u.type==='rail'){
-  // A single exposed metal hanging rod: no top, bottom, backing or side panels.
-  const rod=new THREE.Mesh(new THREE.CylinderGeometry(.012,.012,w,12),metal);
-  rod.rotation.z=Math.PI/2;rod.position.set(0,.018,d*.12);rod.userData.wardrobeUnitId=u.id;group.add(rod);
-  for(const side of [-1,1]){
-    part(.025,.05,.09,side*(w/2-.018),.018,-d/2+.045,metal);
-    part(.018,.02,d*.62,side*(w/2-.018),.018,-d*.15,metal);
+function draw3d({scene,room,THREE}){
+ const mats={
+  wood:new THREE.MeshStandardMaterial({color:0xb28c66,roughness:.68}),
+  inside:new THREE.MeshStandardMaterial({color:0xc8ad8b,roughness:.82}),
+  edge:new THREE.MeshStandardMaterial({color:0x71563f,roughness:.76}),
+  front:new THREE.MeshStandardMaterial({color:0xa78260,roughness:.57}),
+  metal:new THREE.MeshStandardMaterial({color:0xbac3c9,metalness:.78,roughness:.26}),
+  darkMetal:new THREE.MeshStandardMaterial({color:0x626e75,metalness:.75,roughness:.3}),
+  selected:new THREE.MeshStandardMaterial({color:0x52bdfd,emissive:0x14608a,transparent:true,opacity:.78,depthWrite:false})
+ };
+ function wallAnchor(u){
+  const w=u.width,d=u.depth,center=-span(u.wall,room)/2+u.offset+w/2;
+  if(u.wall==='west')return [-room.width/2+d/2,-room.length/2+u.offset+w/2,Math.PI/2];
+  if(u.wall==='east')return [room.width/2-d/2,-room.length/2+u.offset+w/2,-Math.PI/2];
+  if(u.wall==='north')return [center,-room.length/2+d/2,0];
+  return [center,room.length/2-d/2,Math.PI];
+ }
+ for(const u of units){
+  fit(u,room);
+  const w=u.width,h=u.height,d=u.depth,t=Math.min(.022,w/14),group=new THREE.Group();
+  const [x,z,rotation]=wallAnchor(u);group.position.set(x,u.base||0,z);group.rotation.y=rotation;
+  group.userData.wardrobeUnitId=u.id;scene.add(group);
+  function part(a,b,c,px,py,pz,mat=mats.wood){
+   const m=new THREE.Mesh(new THREE.BoxGeometry(Math.max(.003,a),Math.max(.003,b),Math.max(.003,c)),mat);
+   m.position.set(px,py,pz);m.userData.wardrobeUnitId=u.id;group.add(m);return m;
   }
-  if(u.id===selected)part(w+.025,.009,.035,0,.055,d*.12,highlight);
-  continue;
+  function cylinder(radius,length,px,py,pz,mat=mats.metal,axis='x'){
+   const m=new THREE.Mesh(new THREE.CylinderGeometry(radius,radius,length,14),mat);
+   if(axis==='x')m.rotation.z=Math.PI/2;
+   else if(axis==='z')m.rotation.x=Math.PI/2;
+   m.position.set(px,py,pz);m.userData.wardrobeUnitId=u.id;group.add(m);return m;
+  }
+  // Selection outline is deliberately shallow so it does not look like another shelf.
+  if(u.id===selected){
+   part(w+.028,.007,Math.min(d+.02,.78),0,h+.018,0,mats.selected);
+  }
+  if(u.type==='rail'){
+   // Bare wall-fixed chrome rail, two rear brackets, and small end caps.
+   const rodY=.018,rodZ=Math.min(d*.27,.11);
+   cylinder(.013,w,0,rodY,rodZ);
+   for(const side of [-1,1]){
+    const px=side*(w/2-.035);
+    cylinder(.009,Math.max(.06,d*.55),px,rodY,(-d/2+rodZ)/2,mats.darkMetal,'z');
+    part(.055,.065,.012,px,rodY,-d/2+.008,mats.metal);
+    cylinder(.018,.016,side*(w/2-.006),rodY,rodZ,mats.darkMetal);
+   }
+   continue;
+  }
+  if(u.type==='floating_shelf'){
+   // Single solid plank with discreet wall brackets; no carcass or dividers.
+   part(w,.035,d,0,.018,0,mats.wood);
+   part(w,.006,d,0,.038,0,mats.inside);
+   for(const side of [-1,1]){
+    const px=side*Math.min(w*.32,w/2-.055);
+    part(.022,.055,Math.min(d*.56,.18),px,-.027,-d*.23,mats.darkMetal);
+    part(.032,.095,.012,px,-.045,-d/2+.008,mats.darkMetal);
+   }
+   continue;
+  }
+  // Complete units: cabinet carcass with a contrasting back, edges and feet.
+  part(w,t,d,0,t/2,0);
+  part(w,t,d,0,h-t/2,0);
+  part(t,h,d,-w/2+t/2,h/2,0);
+  part(t,h,d,w/2-t/2,h/2,0);
+  part(w-.03,h-.03,.012,0,h/2,-d/2+.009,mats.inside);
+  part(w,.012,.015,0,h-.009,d/2-.009,mats.edge);
+  part(w,.012,.015,0,.012,d/2-.009,mats.edge);
+  const bottom=.055,usable=Math.max(.1,h-.12);
+  if(u.type==='drawers'){
+   const count=Math.max(1,u.drawers||4),gap=.009,drawerH=(usable-gap*(count-1))/count;
+   for(let i=0;i<count;i++){
+    const yy=bottom+drawerH*(i+.5)+gap*i;
+    part(w-.065,drawerH-.012,.035,0,yy,d/2-.013,mats.front);
+    part(w-.095,.007,.008,0,yy+(drawerH-.012)/2-.008,d/2+.007,mats.edge);
+    // Horizontal brushed-metal drawer pull.
+    cylinder(.007,Math.min(.17,w*.4),0,yy,d/2+.024,mats.metal);
+    for(const px of [-.055,.055])cylinder(.005,.024,px,yy,d/2+.013,mats.darkMetal,'z');
+   }
+   continue;
+  }
+  const shelves=Math.max(0,u.shelves||0);
+  for(let i=1;i<=shelves;i++){
+   const yy=bottom+usable*i/(shelves+1);
+   part(w-.045,.026,d-.035,0,yy,0,mats.wood);
+   part(w-.045,.006,.012,0,yy+.01,d/2-.027,mats.edge);
+  }
+  const rails=Math.max(0,u.rails||0);
+  for(let i=0;i<rails;i++){
+   const yy=bottom+usable*(i+1)/(rails+1);
+   cylinder(.011,Math.max(.08,w-.095),0,yy,d/2-.105,mats.metal);
+   for(const side of [-1,1]){
+    part(.028,.02,.065,side*(w/2-.055),yy,d/2-.11,mats.darkMetal);
+   }
+  }
+  if(u.type==='wardrobe'&&u.drawers>0){
+   const count=Math.min(u.drawers,4),dh=Math.min(.19,usable*.4/count);
+   for(let i=0;i<count;i++){
+    const yy=bottom+dh*(i+.5);
+    part(w-.068,dh-.008,.027,0,yy,d/2-.012,mats.front);
+    cylinder(.006,Math.min(.13,w*.3),0,yy,d/2+.012,mats.metal);
+   }
+  }
+ }
 }
-if(u.type==='floating_shelf'){
-  // One wall-fixed plank, with no enclosing cabinet carcass.
-  part(w,.035,d,0,.018,0,wood);
-  if(u.id===selected)part(w+.025,.008,d+.025,0,.042,0,highlight);
-  continue;
-}
-if(u.id===selected){part(w+.035,.018,d+.035,0,.012,0,highlight)}part(w,t,d,0,t/2,0,wood);part(w,t,d,0,h-t/2,0,wood);if(u.type!=='rail'){part(t,h,d,-w/2+t/2,h/2,0,wood);part(t,h,d,w/2-t/2,h/2,0,wood);part(w,h,t,0,h/2,-d/2+t/2,edge)}const available=h-.12;let base=.08;if(u.drawers){const drawerH=Math.min(.23,available*.55/u.drawers);for(let i=0;i<u.drawers;i++){const yy=base+drawerH*(i+.5);part(w-.06,drawerH-.012,.035,0,yy,d/2-.02,drawerMat);part(.12,.012,.018,0,yy,d/2+.005,metal)}base+=drawerH*u.drawers+.08}const top=h-.09;const roomHeight=Math.max(.1,top-base);if(u.shelves){for(let i=1;i<=u.shelves;i++){const yy=base+roomHeight*i/(u.shelves+1);part(w-.045,.025,d-.03,0,yy,0,wood)}}if(u.rails){for(let i=0;i<u.rails;i++){const yy=base+roomHeight*(i+.6)/(u.rails+.6);part(w-.09,.018,.018,0,yy,d/2-.1,metal)}}}}
 document.querySelectorAll('[data-add-unit]').forEach(b=>b.onclick=()=>add(b.dataset.addUnit));window.wardrobeFurniture={draw2d,draw3d,selectUnit,moveUnit,getSelected:()=>selected,getUnits:()=>units.map(u=>({...u})),setSnap:v=>{snapEnabled=!!v},isSnap:()=>snapEnabled};editor();renderObjectList();api.refresh();
 })();
