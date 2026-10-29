@@ -11,7 +11,7 @@ function fit(u,room){u.width=limit(n(u.width,.6),.2,maxWidth(u,room));u.depth=li
 function collidesDoor(u,room){if(u.wall!==room.doorWall)return false;const a=u.offset,b=u.offset+u.width,c=room.doorOffset,d=c+room.doorWidth;return a<d+.08&&b>c-.08}
 function snapOffset(u,raw,room){const maximum=Math.max(.02,span(u.wall,room)-u.width-.02);let pos=limit(raw,.02,maximum);if(!snapEnabled)return Math.round(pos*100)/100;const candidates=[.02,maximum];for(const other of units){if(other.id!==u.id&&other.wall===u.wall){candidates.push(other.offset+other.width,other.offset-u.width)}}let best=pos,dist=.051;for(const candidate of candidates){const d=Math.abs(candidate-pos);if(d<dist&&candidate>=.02&&candidate<=maximum){best=candidate;dist=d}}return Math.round(best*100)/100}
 function moveUnit(id,offset){const u=units.find(v=>v.id===id);if(!u)return;u.offset=snapOffset(u,offset,api.getRoom());save()}
-function save(){localStorage.setItem(KEY,JSON.stringify(units));api.refresh();editor();renderObjectList()}
+function save(){localStorage.setItem(KEY,JSON.stringify(units));window.dispatchEvent(new Event('wardrobe-room-local-changed'));api.refresh();editor();renderObjectList()}
 function chooseWall(type,room){return type==='rail'||type==='floating_shelf'?'east':'west'}
 function add(type){const room=api.getRoom(),preset=initial[type];const u={id:'u'+Date.now()+Math.random().toString(36).slice(2,7),name:types[type]+' '+(units.length+1),type,wall:chooseWall(type,room),offset:.1,base:0,...preset};fit(u,room);units.push(u);selected=u.id;save();$('furnitureNotice').textContent='Added '+u.name+'. Select it in the Object List or drag it along its wall.'}
 function unit(){return units.find(u=>u.id===selected)}
@@ -163,5 +163,13 @@ function draw3d({scene,room,THREE}){
   }
  }
 }
-document.querySelectorAll('[data-add-unit]').forEach(b=>b.onclick=()=>add(b.dataset.addUnit));window.wardrobeFurniture={draw2d,draw3d,selectUnit,moveUnit,getSelected:()=>selected,getUnits:()=>units.map(u=>({...u})),setSnap:v=>{snapEnabled=!!v},isSnap:()=>snapEnabled};editor();renderObjectList();api.refresh();
+document.querySelectorAll('[data-add-unit]').forEach(b=>b.onclick=()=>add(b.dataset.addUnit));window.wardrobeFurniture={draw2d,draw3d,selectUnit,moveUnit,getSelected:()=>selected,getUnits:()=>units.map(u=>({...u})),
+ getCompartments:()=>units.flatMap(u=>{
+  const make=(kind,i)=>({id:u.id+':'+kind+':'+i,unitId:u.id,unitName:u.name,kind,index:i+1,label:u.name+' — '+(kind==='rail'?'Rail':kind==='shelf'?'Shelf':'Drawer')+' '+(i+1)});
+  if(u.type==='rail')return [make('rail',0)];
+  if(u.type==='floating_shelf')return [make('shelf',0)];
+  return [...Array.from({length:u.rails||0},(_,i)=>make('rail',i)),...Array.from({length:u.shelves||0},(_,i)=>make('shelf',i)),...Array.from({length:u.drawers||0},(_,i)=>make('drawer',i))];
+ }),
+ reload:()=>{try{const next=JSON.parse(localStorage.getItem(KEY)||'[]');units=Array.isArray(next)?next.filter(v=>v&&types[v.type]):[]}catch{units=[]}selected=units[0]?.id||null;editor();renderObjectList();api.refresh()},
+ setSnap:v=>{snapEnabled=!!v},isSnap:()=>snapEnabled};editor();renderObjectList();api.refresh();
 })();
