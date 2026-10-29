@@ -43,34 +43,63 @@ function draw3d({scene,room,THREE}){
   return [center,room.length/2-d/2,Math.PI];
  }
  const a=window.wardrobeAppearance?.get()||{finish:'oak',shadows:true};const palette={oak:[0xb28c66,0xc8ad8b,0x71563f,0xa78260],walnut:[0x59402f,0x795b46,0x34251d,0x654a37],white:[0xe5e3dc,0xf5f3ed,0xb5b5ae,0xdad8d1],graphite:[0x4d5358,0x64696d,0x282c30,0x575b60]};const colors=palette[a.finish]||palette.oak;for(const [key,i] of [['wood',0],['inside',1],['edge',2],['front',3]])mats[key].color.setHex(colors[i]);
- // Lightweight illustrative garments. These are not the user's actual catalogue items.
+ // Read-only preview: only the actual clothing assigned to this compartment.
  const displayClothes=window.wardrobeAppearance?.get?.().showGarments!==false;
- const garmentPalette=[0x4e657d,0xb9a49b,0x42594f,0x9b7970,0xd8c9ae,0x6e7484];
- function sampleClothes(group,THREE,w,railY,railZ,count){
-  const n=Math.min(count,Math.max(1,Math.floor(w/.15)));
-  for(let i=0;i<n;i++){
-   const x=(i-(n-1)/2)*Math.min(.15,(w-.12)/Math.max(1,n));
-   const fabric=new THREE.MeshStandardMaterial({color:garmentPalette[i%garmentPalette.length],roughness:.96,side:THREE.DoubleSide});
-   const hanger=new THREE.MeshStandardMaterial({color:0x87939b,metalness:.7,roughness:.33});
-   const hook=new THREE.Mesh(new THREE.TorusGeometry(.012,.003,5,10,Math.PI*1.4),hanger);
-   hook.rotation.y=Math.PI/2;hook.position.set(x,railY-.014,railZ);group.add(hook);
-   const shape=new THREE.Shape();
-   shape.moveTo(-.035,0);shape.lineTo(-.068,-.033);shape.lineTo(-.085,-.087);shape.lineTo(-.058,-.099);
-   shape.lineTo(-.043,-.073);shape.lineTo(-.045,-.27);shape.lineTo(.045,-.27);
-   shape.lineTo(.043,-.073);shape.lineTo(.058,-.099);shape.lineTo(.085,-.087);
-   shape.lineTo(.068,-.033);shape.lineTo(.035,0);shape.lineTo(-.035,0);
-   const shirt=new THREE.Mesh(new THREE.ShapeGeometry(shape),fabric);
-   shirt.position.set(x,railY-.055,railZ);group.add(shirt);
-  }
+ const locationId=(unit,kind,index)=>window.wardrobeStorageLocations?.idFor(unit.id,kind,index);
+ const itemsAt=(unit,kind,index)=>displayClothes?(window.wardrobeGarmentPreview?.itemsFor(locationId(unit,kind,index))||[]):[];
+ function garmentColour(value){
+  const v=String(value||'').toLowerCase().trim();
+  const named={black:0x24282c,white:0xece8df,blue:0x4776a4,navy:0x253f68,red:0xa44d4a,green:0x567f63,grey:0x898b8c,gray:0x898b8c,pink:0xc78f9f,purple:0x786c9e,yellow:0xd2b45d,orange:0xc98750,brown:0x82614c,beige:0xc6ae8b,cream:0xe5d9bc};
+  if(/^#[0-9a-f]{6}$/i.test(v))return parseInt(v.slice(1),16);
+  const key=Object.keys(named).find(k=>v.includes(k));return key?named[key]:0x738395;
  }
- function foldedClothes(group,THREE,w,y,z){
-  for(let i=0;i<Math.min(3,Math.max(1,Math.floor(w/.25)));i++){
-   const x=(i-1)*Math.min(.23,w/3);
-   for(let layer=0;layer<3;layer++){
-    const m=new THREE.Mesh(new THREE.BoxGeometry(.16,.022,.17),new THREE.MeshStandardMaterial({color:garmentPalette[(i*2+layer)%garmentPalette.length],roughness:.93}));
-    m.position.set(x,y+.015+layer*.024,z);group.add(m);
+ function materialFor(item){return new THREE.MeshStandardMaterial({color:garmentColour(item.colour),roughness:.92,side:THREE.DoubleSide})}
+ function mesh(group,geometry,mat,x,y,z,item){
+  const m=new THREE.Mesh(geometry,mat);m.position.set(x,y,z);m.userData.wardrobeGarmentId=item.id;m.castShadow=true;group.add(m);return m;
+ }
+ function hanger(group,x,y,z){
+  const steel=new THREE.MeshStandardMaterial({color:0xa3aab0,metalness:.72,roughness:.28});
+  const hook=new THREE.Mesh(new THREE.TorusGeometry(.012,.003,5,10,Math.PI*1.3),steel);
+  hook.rotation.y=Math.PI/2;hook.position.set(x,y,z);group.add(hook);
+  const v=new THREE.Shape();v.moveTo(-.075,-.035);v.lineTo(0,-.07);v.lineTo(.075,-.035);
+  const wire=new THREE.Mesh(new THREE.BufferGeometry().setFromPoints(v.getPoints()),steel);
+  // A narrow hanger bar is easier to read in the compact wardrobe.
+  const bar=new THREE.Mesh(new THREE.CylinderGeometry(.0025,.0025,.15,6),steel);
+  bar.rotation.z=Math.PI/2;bar.position.set(x,y-.058,z);group.add(bar);
+ }
+ function hangingClothes(group,w,railY,railZ,items){
+  const visible=items.slice(0,Math.max(1,Math.floor((w-.07)/.105)));
+  const spacing=Math.min(.115,(w-.09)/Math.max(1,visible.length));
+  visible.forEach((item,i)=>{
+   const x=(i-(visible.length-1)/2)*spacing,cat=item.category.toLowerCase();
+   hanger(group,x,railY-.008,railZ);
+   const mat=materialFor(item),pants=/trouser|jean|legging|short|skirt/.test(cat);
+   const dress=/dress|coat|jacket|hoodie|jumper|sweat/.test(cat);
+   const height=pants?.34:dress?.34:.245;
+   if(pants){
+    mesh(group,new THREE.BoxGeometry(.075,.035,.017),mat,x,railY-.105,railZ,item);
+    for(const dx of [-.022,.022])mesh(group,new THREE.BoxGeometry(.034,.23,.014),mat,x+dx,railY-.24,railZ,item);
+   }else{
+    const shape=new THREE.Shape();
+    shape.moveTo(-.031,0);shape.lineTo(-.066,-.027);shape.lineTo(-.084,-.08);
+    shape.lineTo(-.057,-.091);shape.lineTo(-.044,-.065);
+    shape.lineTo(-.045,-height);shape.lineTo(.045,-height);
+    shape.lineTo(.044,-.065);shape.lineTo(.057,-.091);shape.lineTo(.084,-.08);
+    shape.lineTo(.066,-.027);shape.lineTo(.031,0);shape.lineTo(-.031,0);
+    mesh(group,new THREE.ShapeGeometry(shape),mat,x,railY-.07,railZ,item);
+    // Neckline and a subtle seam differentiate shirts from coats.
+    const trim=new THREE.MeshStandardMaterial({color:0x3d4145,roughness:.8});
+    if(/shirt|polo|coat|jacket/.test(cat))mesh(group,new THREE.BoxGeometry(.005,height*.65,.003),trim,x,railY-.08-height*.35,railZ+.002,item);
    }
-  }
+  });
+ }
+ function foldedClothes(group,w,y,z,items){
+  const maxColumns=Math.max(1,Math.floor(w/.21)),columns=Math.min(maxColumns,Math.max(1,Math.ceil(items.length/4)));
+  const visible=items.slice(0,columns*4);
+  visible.forEach((item,i)=>{
+   const col=i%columns,layer=Math.floor(i/columns),x=(col-(columns-1)/2)*Math.min(.21,w/columns);
+   mesh(group,new THREE.BoxGeometry(Math.min(.17,w/columns*.82),.024,.18),materialFor(item),x,y+.014+layer*.026,z,item);
+  });
  }
  for(const u of units){
   fit(u,room);
@@ -79,13 +108,13 @@ function draw3d({scene,room,THREE}){
   group.userData.wardrobeUnitId=u.id;scene.add(group);
   function part(a,b,c,px,py,pz,mat=mats.wood){
    const m=new THREE.Mesh(new THREE.BoxGeometry(Math.max(.003,a),Math.max(.003,b),Math.max(.003,c)),mat);
-   m.position.set(px,py,pz);m.userData.wardrobeUnitId=u.id;m.castShadow=!!a.shadows;m.receiveShadow=!!a.shadows;group.add(m);return m;
+   m.position.set(px,py,pz);m.userData.wardrobeUnitId=u.id;m.castShadow=!!window.wardrobeAppearance?.get?.().shadows;m.receiveShadow=!!window.wardrobeAppearance?.get?.().shadows;group.add(m);return m;
   }
   function cylinder(radius,length,px,py,pz,mat=mats.metal,axis='x'){
    const m=new THREE.Mesh(new THREE.CylinderGeometry(radius,radius,length,14),mat);
    if(axis==='x')m.rotation.z=Math.PI/2;
    else if(axis==='z')m.rotation.x=Math.PI/2;
-   m.position.set(px,py,pz);m.userData.wardrobeUnitId=u.id;m.castShadow=!!a.shadows;m.receiveShadow=!!a.shadows;group.add(m);return m;
+   m.position.set(px,py,pz);m.userData.wardrobeUnitId=u.id;m.castShadow=!!window.wardrobeAppearance?.get?.().shadows;m.receiveShadow=!!window.wardrobeAppearance?.get?.().shadows;group.add(m);return m;
   }
   // Selection outline is deliberately shallow so it does not look like another shelf.
   if(u.id===selected){
@@ -101,7 +130,7 @@ function draw3d({scene,room,THREE}){
     part(.055,.065,.012,px,rodY,-d/2+.008,mats.metal);
     cylinder(.018,.016,side*(w/2-.006),rodY,rodZ,mats.darkMetal);
    }
-   if(displayClothes)sampleClothes(group,THREE,w,rodY,rodZ,Math.min(5,Math.floor(w/.15)));
+   hangingClothes(group,w,rodY,rodZ,itemsAt(u,'rail',0));
    continue;
   }
   if(u.type==='floating_shelf'){
@@ -113,7 +142,7 @@ function draw3d({scene,room,THREE}){
     part(.022,.055,Math.min(d*.56,.18),px,-.027,-d*.23,mats.darkMetal);
     part(.032,.095,.012,px,-.045,-d/2+.008,mats.darkMetal);
    }
-   if(displayClothes)foldedClothes(group,THREE,w,.04,0);
+   foldedClothes(group,w,.04,0,itemsAt(u,'shelf',0));
    continue;
   }
   // Complete units: cabinet carcass with a contrasting back, edges and feet.
@@ -131,6 +160,8 @@ function draw3d({scene,room,THREE}){
     const yy=bottom+drawerH*(i+.5)+gap*i;
     part(w-.065,drawerH-.012,.035,0,yy,d/2-.013,mats.front);
     part(w-.095,.007,.008,0,yy+(drawerH-.012)/2-.008,d/2+.007,mats.edge);
+    // Drawer contents are represented by a small colour-coded label on the front.
+    const drawerItems=itemsAt(u,'drawer',i);if(drawerItems.length){const marker=new THREE.Mesh(new THREE.BoxGeometry(.038,.018,.006),materialFor(drawerItems[0]));marker.position.set(w/2-.07,yy,d/2+.01);group.add(marker)}
     // Horizontal brushed-metal drawer pull.
     cylinder(.007,Math.min(.17,w*.4),0,yy,d/2+.024,mats.metal);
     for(const px of [-.055,.055])cylinder(.005,.024,px,yy,d/2+.013,mats.darkMetal,'z');
@@ -142,13 +173,13 @@ function draw3d({scene,room,THREE}){
    const yy=bottom+usable*i/(shelves+1);
    part(w-.045,.026,d-.035,0,yy,0,mats.wood);
    part(w-.045,.006,.012,0,yy+.01,d/2-.027,mats.edge);
-   if(displayClothes&&i===shelves)foldedClothes(group,THREE,w,yy+.018,0);
+   foldedClothes(group,w,yy+.018,0,itemsAt(u,'shelf',i-1));
   }
   const rails=Math.max(0,u.rails||0);
   for(let i=0;i<rails;i++){
    const yy=bottom+usable*(i+1)/(rails+1);
    cylinder(.011,Math.max(.08,w-.095),0,yy,d/2-.105,mats.metal);
-   if(displayClothes)sampleClothes(group,THREE,w,yy,d/2-.105,Math.min(4,Math.floor(w/.16)));
+   hangingClothes(group,w,yy,d/2-.105,itemsAt(u,'rail',i));
    for(const side of [-1,1]){
     part(.028,.02,.065,side*(w/2-.055),yy,d/2-.11,mats.darkMetal);
    }
@@ -159,10 +190,12 @@ function draw3d({scene,room,THREE}){
     const yy=bottom+dh*(i+.5);
     part(w-.068,dh-.008,.027,0,yy,d/2-.012,mats.front);
     cylinder(.006,Math.min(.13,w*.3),0,yy,d/2+.012,mats.metal);
+    const drawerItems=itemsAt(u,'drawer',i);if(drawerItems.length){const marker=new THREE.Mesh(new THREE.BoxGeometry(.038,.018,.006),materialFor(drawerItems[0]));marker.position.set(w/2-.07,yy,d/2+.012);group.add(marker)}
    }
   }
  }
 }
+window.addEventListener('wardrobe-garments-updated',()=>api.refresh());
 document.querySelectorAll('[data-add-unit]').forEach(b=>b.onclick=()=>add(b.dataset.addUnit));window.wardrobeFurniture={draw2d,draw3d,selectUnit,moveUnit,getSelected:()=>selected,getUnits:()=>units.map(u=>({...u})),
  getCompartments:()=>units.flatMap(u=>{
   const make=(kind,i)=>({id:u.id+':'+kind+':'+i,unitId:u.id,unitName:u.name,kind,index:i+1,label:u.name+' — '+(kind==='rail'?'Rail':kind==='shelf'?'Shelf':'Drawer')+' '+(i+1)});
