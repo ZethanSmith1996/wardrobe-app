@@ -6,7 +6,7 @@ const client=new Appwrite.Client().setEndpoint('https://fra.cloud.appwrite.io/v1
 const account=new Appwrite.Account(client),db=new Appwrite.TablesDB(client);
 function emit(){window.dispatchEvent(new Event('wardrobe-garments-updated'));const el=document.getElementById('garmentPreviewStatus');if(el)el.textContent=notice}
 function fromLocal(){try{const d=JSON.parse(localStorage.getItem(KEY)||'{}');return Array.isArray(d.items)?d.items:[]}catch{return []}}
-function sanitize(items){return items.filter(x=>x&&x.section&&['available','clean'].includes(String(x.status||'').toLowerCase())).map(x=>({id:String(x.id),name:String(x.name||'Garment'),category:String(x.category||''),colour:String(x.colour||''),section:String(x.section),status:String(x.status)}))}
+function sanitize(items){return items.filter(x=>x&&x.section&&['available','clean'].includes(String(x.status||'').toLowerCase())).map(x=>({id:String(x.id),name:String(x.name||'Garment'),category:String(x.category||''),colour:String(x.colour||''),section:String(x.section),status:String(x.status),notes:String(x.notes||''),photoId:String(x.photoId||'')}))}
 async function reload(){
  try{
   const user=await account.get();connected=true;
@@ -16,7 +16,7 @@ async function reload(){
    const batch=page.rows||[];rows.push(...batch.filter(x=>x.owner_id===user.$id));offset+=batch.length;
    if(batch.length<100)break;
   }while(offset<10000);
-  garments=sanitize(rows.map(x=>({id:x.$id,name:x.name,category:x.category,colour:x.colour,section:x.section_id,status:x.status})));
+  garments=sanitize(rows.map(x=>({id:x.$id,name:x.name,category:x.category,colour:x.colour,section:x.section_id,status:x.status,notes:x.notes,photoId:x.photo_id})));
   notice='Showing '+garments.length+' available/clean catalogue garments in their assigned locations.';
  }catch(e){
   // Do not display possibly stale clothing belonging to a previously signed-in account.
@@ -24,7 +24,7 @@ async function reload(){
  }
  emit();
 }
-window.wardrobeGarmentPreview={itemsFor:locationId=>garments.filter(x=>x.section===locationId),reload,get connected(){return connected}};
+window.wardrobeGarmentPreview={itemsFor:locationId=>garments.filter(x=>x.section===locationId),all:()=>garments.slice(),byId:id=>garments.find(x=>x.id===id),reload,get connected(){return connected}};
 window.addEventListener('focus',reload);
 window.addEventListener('storage',e=>{if(e.key===KEY)reload()});
 window.addEventListener('load',reload);
