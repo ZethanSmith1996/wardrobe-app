@@ -8,9 +8,9 @@
   const KEY='wardrobe-prototype-v1';
   const tables={sections:'wardrobe_sections',items:'clothing_items',history:'laundry_history',details:'clothing_details',categories:'wardrobe_category_settings'};
   const $=s=>document.querySelector(s);
-  let user=null, ready=false, busy=false, pending=false, timer=null, lastSnapshot=null;
+  let user=null, ready=false, busy=false, pending=false, timer=null, lastSnapshot=null;let syncMessage='Connecting…';const PENDING_KEY='wardrobe-sync-pending-v565';
   let cloudIds={sections:new Set(),items:new Set(),details:new Set()};
-  const notice=(message,error=false)=>{const el=$('#cloud-notice');el.textContent=message;el.classList.toggle('error',error)};
+  const notice=(message,error=false)=>{syncMessage=message;const icon=document.getElementById('sync-icon');if(icon){icon.textContent=error?'☁!':message.includes('Saving')?'↻':message.includes('saved')||message.includes('connected')?'☁✓':'☁';icon.title=message;} const el=$('#cloud-notice');el.textContent=message;el.classList.toggle('error',error)};
   const safe=x=>String(x??'');
   const perms=()=>[A.Permission.read(A.Role.user(user.$id)),A.Permission.update(A.Role.user(user.$id)),A.Permission.delete(A.Role.user(user.$id))];
   const parse=()=>JSON.parse(localStorage.getItem(KEY)||'{"sections":[],"items":[]}');
@@ -57,7 +57,7 @@
       if(item.photos.length){item.photo=item.photos[0].src;item.photo_id=item.photos[0].fileId}
     }else if(item.photo_id){item.photos=[{id:item.photo_id,fileId:item.photo_id,src:item.photo,label:''}]}
    }
-   localStorage.setItem(KEY,JSON.stringify(output));lastSnapshot=clone(output);ready=true;window.dispatchEvent(new Event('wardrobe-cloud-loaded'));notice('Cloud connected · '+output.items.length+' clothing items');$('#cloud-actions').hidden=false}
+   localStorage.setItem(KEY,JSON.stringify(output));lastSnapshot=clone(output);ready=true;localStorage.removeItem(PENDING_KEY);window.dispatchEvent(new Event('wardrobe-cloud-loaded'));notice('Cloud connected · '+output.items.length+' clothing items');$('#cloud-actions').hidden=false}
   async function push(){if(!ready||!user)return;if(busy){pending=true;return}busy=true;try{const s=parse();const currentSectionIds=new Set(s.sections.map(x=>x.id)),currentItemIds=new Set(s.items.map(x=>x.id));
     // Save sections first, so clothing location references remain valid.
     for(const section of s.sections){await upsert(tables.sections,section.id,sectionData(section),cloudIds.sections.has(section.id));cloudIds.sections.add(section.id)}
@@ -70,6 +70,9 @@
         const live=parse();const target=live.items.find(x=>x.id===item.id);
         if(target){target.photo_id=uploadedId;target.photo=null;localStorage.setItem(KEY,JSON.stringify(live))}
       }
+      // Restore photographs as new private Storage objects before saving details.
+      for(const photo of item.photos||[]){if(photo.src?.startsWith('data:image/')&&!photo.fileId){photo.fileId=await uploadPhoto(photo.src);const live=parse();const target=live.items.find(x=>x.id===item.id);const match=target?.photos?.find(p=>p.id===photo.id);if(match){match.fileId=photo.fileId;localStorage.setItem(KEY,JSON.stringify(live))}}}
+      if(item.photos?.length&&item.photos[0].fileId)item.photo_id=item.photos[0].fileId;
       const old=lastSnapshot?.items?.find(x=>x.id===item.id);
       await upsert(tables.items,item.id,itemData(item),cloudIds.items.has(item.id));
       cloudIds.items.add(item.id);
@@ -87,14 +90,14 @@
       try{await storage.deleteFile({bucketId:BUCKET,fileId:photoId})}
       catch(error){console.warn('Photo cleanup failed',photoId,error)}
     }}
-    const catPayload=JSON.stringify(window.wardrobeCategories?.all()||{});await upsert(tables.categories,'categories_'+user.$id,{owner_id:user.$id,payload:catPayload},cloudIds.categoriesExists);cloudIds.categoriesExists=true;lastSnapshot=clone(parse());notice('All changes saved to Appwrite');
-  }catch(e){console.error(e);notice('Cloud save failed: '+(e.message||e),true)}finally{busy=false;if(pending){pending=false;setTimeout(push,150)}}}
-  function schedule(){if(!ready)return;clearTimeout(timer);notice('Saving changes…');timer=setTimeout(push,650)}
+    const catPayload=JSON.stringify(window.wardrobeCategories?.all()||{});await upsert(tables.categories,'categories_'+user.$id,{owner_id:user.$id,payload:catPayload},cloudIds.categoriesExists);cloudIds.categoriesExists=true;lastSnapshot=clone(parse());localStorage.removeItem(PENDING_KEY);notice('All changes saved to Appwrite');
+  }catch(e){console.error(e);localStorage.setItem(PENDING_KEY,'1');notice('Cloud save failed: '+(e.message||e),true)}finally{busy=false;if(pending){pending=false;setTimeout(push,150)}}}
+  function schedule(){localStorage.setItem(PENDING_KEY,'1');if(!ready)return;clearTimeout(timer);notice('Saving changes…');timer=setTimeout(push,650)}
   async function importLocal(){if(!ready)return;const raw=localStorage.getItem('wardrobe-stage4-local-backup');if(!raw)return notice('No local backup found',true);let data;try{data=JSON.parse(raw)}catch{return notice('Local backup could not be read',true)}if(!Array.isArray(data.items)||!Array.isArray(data.sections))return notice('Local backup is invalid',true);
     if(!confirm('Import your original local wardrobe into this account? This ADDS its clothing and sections to your cloud wardrobe. Sample items will also be imported if present.'))return;
     notice('Importing your local wardrobe…');try{const current=parse(),map=new Map();for(const s of data.sections){const newId=id();map.set(s.id,newId);current.sections.push({...s,id:newId})}for(const x of data.items)current.items.push({...x,id:id(),section:map.get(x.section)||''});localStorage.setItem(KEY,JSON.stringify(current));await push();if($('#cloud-notice').classList.contains('error'))return;await pull();notice('Local wardrobe imported successfully')}catch(e){notice('Import failed: '+e.message,true)}}
   async function signIn(email,password,register){notice(register?'Creating account…':'Signing in…');try{if(register)await account.create({userId:id(),email,password});await account.createEmailPasswordSession({email,password});await initialize()}catch(e){notice(e.message||'Authentication failed',true)}}
-  async function initialize(){user=await account.get();$('#auth-screen').hidden=true;$('#cloud-user').textContent=user.email;$('#cloud-user').hidden=false;$('#cloud-logout').hidden=false;const backupKey='wardrobe-stage4-local-backup';if(!localStorage.getItem(backupKey)){const original=localStorage.getItem(KEY);if(original)localStorage.setItem(backupKey,original)}await pull()}
+  async function initialize(){user=await account.get();$('#auth-screen').hidden=true;$('#cloud-user').textContent=user.email;$('#cloud-user').hidden=false;$('#cloud-logout').hidden=false;const backupKey='wardrobe-stage4-local-backup';if(!localStorage.getItem(backupKey)){const original=localStorage.getItem(KEY);if(original)localStorage.setItem(backupKey,original)}if(localStorage.getItem(PENDING_KEY)==='1'){ready=true;lastSnapshot=null;notice('Local changes pending — use Sync Now',true);$('#cloud-actions').hidden=false;}else await pull();if(localStorage.getItem(PENDING_KEY)==='1')notice('Local changes pending — use Sync Now',true)}
   async function logout(){if(!confirm('Sign out? Your cloud wardrobe remains saved.'))return;ready=false;await account.deleteSession({sessionId:'current'});user=null;$('#auth-screen').hidden=false;$('#cloud-logout').hidden=true;$('#cloud-user').hidden=true;$('#cloud-actions').hidden=true;notice('Signed out')}
   document.addEventListener('DOMContentLoaded',async()=>{
     $('#auth-form').addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.target);await signIn(safe(f.get('email')).trim(),safe(f.get('password')),e.submitter?.value==='register')});
@@ -104,5 +107,5 @@
     window.addEventListener('wardrobe-local-changed',schedule);window.addEventListener('wardrobe-categories-changed',schedule);
     try{await initialize()}catch(e){$('#auth-screen').hidden=false;notice('Sign in to connect your wardrobe')}
   });
-  window.WardrobeCloud={get active(){return ready},uploadPhoto};
+  window.WardrobeCloud={get active(){return ready},get status(){return {message:syncMessage,pending:!!localStorage.getItem(PENDING_KEY)}},uploadPhoto,async retry(){if(!ready)return notice('Sign in before retrying',true);await push()}};document.addEventListener('click',e=>{if(e.target.closest('#sync-icon')){document.querySelector('[data-page=settings]')?.click()}});
 })();
